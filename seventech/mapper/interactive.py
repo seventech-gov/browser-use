@@ -129,6 +129,9 @@ class InteractiveMapper:
 				f'Interactive mapping completed. Parameters collected: {len(session.collector.parameters)}'
 			)
 
+			# Save mapper result to JSON file
+			self._save_mapper_result(mapper_result, session.session_id)
+
 			return mapper_result, session
 
 		except Exception as e:
@@ -339,3 +342,37 @@ Your objective: {original_task}
 			List of collected parameters
 		"""
 		return session.get_collected_parameters()
+
+	def _save_mapper_result(self, mapper_result: MapperResult, session_id: str) -> None:
+		"""Save mapper result to JSON file.
+
+		Args:
+			mapper_result: Mapper result to save
+			session_id: Session ID to use as filename
+		"""
+		from pathlib import Path
+
+		import json
+
+		# Create results directory if it doesn't exist
+		results_dir = Path('seventech/mapper/results')
+		results_dir.mkdir(parents=True, exist_ok=True)
+
+		# Create filename with session ID
+		filename = results_dir / f'{session_id}.json'
+
+		# Prepare data for JSON serialization
+		result_data = {
+			'session_id': session_id,
+			'objective': mapper_result.objective,
+			'success': mapper_result.success,
+			'error_message': mapper_result.error_message,
+			'metadata': mapper_result.metadata,
+			'raw_history': mapper_result.raw_history,  # Complete history for planner
+		}
+
+		# Save to JSON file
+		with open(filename, 'w', encoding='utf-8') as f:
+			json.dump(result_data, f, indent=2, ensure_ascii=False)
+
+		logger.info(f'Saved mapper result to {filename}')
