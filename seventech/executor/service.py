@@ -414,82 +414,80 @@ class Executor:
 					)
 
 			elif action == ActionType.EXTRACT:
-				query = params.get('query', '')
 				is_final_result = params.get('is_final_result', False)
+				query = params.get('query', '')
 
-				if query:
-					# Semantic extraction using browser-use's extract with LLM
-					logger.info(f'Extracting using semantic query: "{query}"')
+				if is_final_result and query:
+					# For final results, use simple regex extraction from DOM
+					logger.info(f'Extracting final result with query: "{query}"')
 
-					try:
-						# Import browser-use Tools for extract functionality
-						from browser_use.tools.service import Tools
+					# Get current page DOM
+					state = await browser.get_browser_state_summary(include_screenshot=False)
+					dom_text = state.dom_state.llm_representation() if state.dom_state else ''
 
-						# Create a default LLM for extraction
-						# Using environment variables for API keys
-						import os
+					# Simple extraction: find the query text and capture next value
+					import re
 
-						from langchain_anthropic import ChatAnthropic  # type: ignore
-						from langchain_openai import ChatOpenAI  # type: ignore
+					# Clean DOM text: remove element indices like *[5]
+					cleaned_dom = re.sub(r'\*\[\d+\]<[^>]+>', '', dom_text)
 
-						# Try to get LLM from environment
-						if os.getenv('ANTHROPIC_API_KEY'):
-							llm = ChatAnthropic(model='claude-3-5-sonnet-20241022', timeout=25, stop=None)
-						elif os.getenv('OPENAI_API_KEY'):
-							llm = ChatOpenAI(model='gpt-4o')
-						else:
-							raise ValueError('No LLM API key found in environment (ANTHROPIC_API_KEY or OPENAI_API_KEY)')
+					# Pattern: find query text, then capture monetary value or number nearby
+					# Example: "Valor Total Emitido na Guia" -> capture "3.692,00"
+					patterns = [
+						# Monetary values (Brazilian format): R$ or just number with comma
+						rf'{re.escape(query)}[^\d]*?R?\$?\s*([\d.]+,\d{{2}})',
+						# Monetary without R$, at least 3 digits
+						rf'{re.escape(query)}[^\d]*?([\d]{{1,3}}\.[\d]{{3}},\d{{2}})',
+						# Simple monetary
+						rf'{re.escape(query)}[^\d]*?([\d.]+,\d{{2}})',
+						# Or find numbers (avoid single digits)
+						rf'{re.escape(query)}[^\d]*?([\d.,]{{3,}})',
+					]
 
-						# Create Tools instance and FileSystem
-						from browser_use.utils import FileSystem
+					extracted_value = None
+					for pattern in patterns:
+						match = re.search(pattern, cleaned_dom, re.IGNORECASE)
+						if match:
+							candidate = match.group(1).strip()
+							# Skip if it looks like element index or year
+							if not re.match(r'^\d{1,2}$|^\d{4}$', candidate):
+								extracted_value = candidate
+								logger.info(f'Extracted value: {extracted_value}')
+								break
 
-						tools_instance = Tools()
-						file_system = FileSystem()
+					if not extracted_value:
+						# Fallback: just return the query area
+						extracted_value = f'Value not found for: {query}'
+						logger.warning(f'Could not extract value for query: {query}')
 
-						# Call extract method directly (Tools.extract is a registered action)
-						result = await tools_instance.extract(  # type: ignore
-							query=query, browser_session=browser, page_extraction_llm=llm, file_system=file_system
-						)
+					# Return structured JSON result
+					import json
 
-						# Extract the content from ActionResult
-						# The result comes as: <url>...</url><query>...</query><result>...</result>
-						text_content = result.extracted_content if hasattr(result, 'extracted_content') else str(result)
+					result_data = {'query': query, 'value': extracted_value, 'extraction_method': 'regex_extraction'}
 
-						# Parse the <result> tag to get just the extracted value
-						import re
+					# Detect if it's a monetary value
+					if re.match(r'[\d.]+,\d{2}', extracted_value):
+						result_data['type'] = 'monetary'
+						result_data['currency'] = 'BRL'
+					elif re.match(r'[\d.,]+', extracted_value):
+						result_data['type'] = 'numeric'
 
-						result_match = re.search(r'<result>\s*(.*?)\s*</result>', text_content, re.DOTALL)
-						if result_match:
-							text_content = result_match.group(1).strip()
-							logger.info(f'Parsed result from extract: {text_content[:200]}...')
-						else:
-							logger.warning(f'Could not parse <result> tag from extract output')
+					text_content = json.dumps(result_data, ensure_ascii=False, indent=2)
 
-						logger.info(f'Semantically extracted: {text_content[:200]}...')
-
-						artifact_metadata = {
-							'is_final_result': is_final_result,
-							'description': query,
-							'extraction_method': 'semantic_query',
-						}
-
-					except Exception as e:
-						logger.error(f'Semantic extraction failed: {e}', exc_info=True)
-						# Fallback: extract whole page
-						state = await browser.get_browser_state_summary(include_screenshot=False)
-						text_content = state.dom_state.llm_representation() if state.dom_state else ''
-						artifact_metadata = {
-							'is_final_result': is_final_result,
-							'description': query,
-							'extraction_method': 'fallback_full_page',
-							'error': str(e),
-						}
+					artifact_metadata = {
+						'is_final_result': True,
+						'description': query,
+						'extraction_method': 'regex_extraction',
+						'value': extracted_value,
+						'structured': True,
+					}
 
 				else:
 					# Extract whole page
 					logger.info('Extracting full page content')
 					state = await browser.get_browser_state_summary(include_screenshot=False)
 					text_content = state.dom_state.llm_representation() if state.dom_state else ''
+
 					artifact_metadata = {'is_final_result': False, 'extraction_method': 'full_page'}
 
 				artifacts.append(

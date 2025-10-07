@@ -131,12 +131,14 @@ class Planner:
 	def _enrich_result_location_with_xpath(self, raw_history: dict, result_location: dict) -> dict:
 		"""Extract rich context for the result element from history.
 
+		Also captures the result that was extracted by the Agent's extract() action.
+
 		Args:
 			raw_history: Serialized agent history
 			result_location: Result location with index
 
 		Returns:
-			Enhanced result_location with xpath, text_content, attributes, etc.
+			Enhanced result_location with xpath, extracted_result, etc.
 		"""
 		target_index = result_location.get('index')
 		if target_index is None:
@@ -146,6 +148,40 @@ class Planner:
 
 		logger.info(f'Enriching result_location for index {target_index}')
 		logger.info(f'Raw history has {len(raw_history.get("history", []))} items')
+
+		# Try to find the extract() action result in history
+		for history_item in raw_history.get('history', []):
+			model_output = history_item.get('model_output')
+			if not model_output:
+				continue
+
+			# Check if this item has extract action
+			actions = model_output.get('action', [])
+			for action in actions:
+				if not action:
+					continue
+
+				action_name = list(action.keys())[0] if action.keys() else ''
+
+				# If this is an extract action, capture its result
+				if action_name == 'extract':
+					# Get the result from history (it's in the next state or in action result)
+					action_result = history_item.get('result')
+					if action_result and isinstance(action_result, str):
+						# Parse <result>...</result> from the action result
+						import re
+
+						result_match = re.search(r'<result>\s*(.*?)\s*</result>', action_result, re.DOTALL)
+						if result_match:
+							extracted_result = result_match.group(1).strip()
+							enriched['extracted_result'] = extracted_result
+							logger.info(f'Captured extracted result from Agent: {extracted_result[:100]}...')
+							break
+
+		if 'extracted_result' in enriched:
+			logger.info('✓ Successfully captured pre-extracted result from Agent history')
+		else:
+			logger.warning('Could not find extracted result in Agent history')
 
 		# Search through history for the state snapshot that contains this element
 		for i, history_item in enumerate(raw_history.get('history', [])):
@@ -341,17 +377,23 @@ class Planner:
 			params['duration_ms'] = original_params.get('duration', 1000)
 
 		elif action_type == ActionType.EXTRACT:
-			# If result_location was marked, use semantic query extraction
+			# If result_location was marked, use pre-extracted result from Agent
 			if result_location:
-				# Use query-based extraction (browser-use's extract with LLM)
 				params['query'] = result_location.get('description', '')
 				params['is_final_result'] = True
 
-				# Try to capture the result the Agent already extracted
-				if original_params.get('query'):
-					params['query'] = original_params['query']
-
-				logger.info(f'EXTRACT configured with query: "{params["query"]}"')
+				# Check if Agent already extracted the result (most reliable!)
+				if result_location.get('extracted_result'):
+					params['pre_extracted_result'] = result_location['extracted_result']
+					params['use_pre_extracted'] = True
+					logger.info(
+						f'EXTRACT will use pre-extracted result from Agent: "{params["pre_extracted_result"][:100]}..."'
+					)
+				else:
+					# Fallback: try query-based extraction if no pre-extracted result
+					if original_params.get('query'):
+						params['query'] = original_params['query']
+					logger.info(f'EXTRACT configured with query (no pre-extracted result): "{params["query"]}"')
 			else:
 				# Default: extract whole page using original params
 				params['query'] = original_params.get('query', '')
