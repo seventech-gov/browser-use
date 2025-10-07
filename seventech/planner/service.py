@@ -62,6 +62,47 @@ class Planner:
 		# Extract steps from history
 		steps = self._extract_steps(mapper_result.raw_history, collected_params, result_location)
 
+		# VALIDATION 1: If result_location exists but no EXTRACT step, add one automatically
+		if result_location and not any(step.action == ActionType.EXTRACT for step in steps):
+			logger.warning('Result location marked but no EXTRACT step found - adding automatically')
+
+			# Create EXTRACT step with result_location info
+			extract_step = PlanStep(
+				sequence_id=len(steps),
+				action=ActionType.EXTRACT,
+				params={
+					'query': result_location.get('description', ''),
+					'is_final_result': True,
+					'use_pre_extracted': False,
+				},
+				description=f'Extract: {result_location.get("description", "result")}',
+			)
+			steps.append(extract_step)
+			logger.info(f'Added automatic EXTRACT step at sequence {len(steps)-1}')
+
+		# VALIDATION 2: If objective implies extraction but no EXTRACT step, add one
+		elif not any(step.action == ActionType.EXTRACT for step in steps):
+			# Check if objective contains extraction keywords
+			extraction_keywords = ['pegar', 'obter', 'consultar', 'buscar', 'valor', 'dados', 'informação', 'get', 'fetch', 'retrieve']
+			objective_lower = mapper_result.objective.lower()
+
+			if any(keyword in objective_lower for keyword in extraction_keywords):
+				logger.warning('Objective implies extraction but no EXTRACT step or result_location - adding automatic EXTRACT')
+
+				# Use objective as query
+				extract_step = PlanStep(
+					sequence_id=len(steps),
+					action=ActionType.EXTRACT,
+					params={
+						'query': mapper_result.objective,
+						'is_final_result': True,
+						'use_pre_extracted': False,
+					},
+					description=f'Extract: {mapper_result.objective}',
+				)
+				steps.append(extract_step)
+				logger.info(f'Added automatic EXTRACT step based on objective keywords')
+
 		# Identify required parameters (combine auto-detected + collected)
 		auto_detected_params = self._identify_parameters(steps)
 		required_params = list(set(auto_detected_params + parameter_names))
