@@ -19,7 +19,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "UPSE",
+  title: "SevenTech",
   description: "Universal Public Service Explorer",
 };
 

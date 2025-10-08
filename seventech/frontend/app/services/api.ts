@@ -93,11 +93,10 @@ class ApiClient {
   }
 
   async createPlanFromSession(sessionId: string, planName?: string): Promise<Plan> {
-    const url = `/api/v1/mapping/sessions/${sessionId}/create-plan`;
-    const body = planName ? JSON.stringify({ plan_name: planName }) : undefined;
+    const params = planName ? `?plan_name=${encodeURIComponent(planName)}` : '';
+    const url = `/api/v1/mapping/sessions/${sessionId}/create-plan${params}`;
     return this.request(url, {
       method: 'POST',
-      body,
     });
   }
 
